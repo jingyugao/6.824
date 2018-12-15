@@ -1,7 +1,10 @@
 package mapreduce
 
 import (
+	"fmt"
 	"hash/fnv"
+	"io/ioutil"
+	"os"
 )
 
 func doMap(
@@ -53,6 +56,30 @@ func doMap(
 	//
 	// Your code here (Part I).
 	//
+
+	buf, err := ioutil.ReadFile(inFile)
+	if err != nil {
+		panic(err)
+	}
+	kvs := mapF(inFile, string(buf))
+	files := []*os.File{}
+	for i := 0; i < nReduce; i++ {
+		faleName := reduceName(jobName, mapTask, i)
+		file, err := os.Create(faleName)
+		if err != nil {
+			panic(err)
+		}
+		defer file.Close()
+		files = append(files, file)
+	}
+	for _, kv := range kvs {
+		index := ihash(kv.Key) % nReduce
+		n, err := files[index].WriteString(fmt.Sprintf("%s=%s\n", kv.Key, kv.Value))
+		if n == 0 || err != nil {
+			println(n, err)
+		}
+	}
+
 }
 
 func ihash(s string) int {
