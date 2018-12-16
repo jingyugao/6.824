@@ -32,7 +32,7 @@ func reduceF(key string, values []string) string {
 		uniqueValues[v] = true
 	}
 	uvs := []string{}
-	for k, _ := range uniqueValues {
+	for k := range uniqueValues {
 		uvs = append(uvs, k)
 	}
 	sort.Strings(uvs)

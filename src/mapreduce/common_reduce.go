@@ -75,7 +75,7 @@ func doReduce(
 		panic(err)
 	}
 	keys := []string{}
-	for k, _ := range kvs {
+	for k := range kvs {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
