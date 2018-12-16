@@ -2,6 +2,8 @@ package mapreduce
 
 import (
 	"fmt"
+
+	_ "net/http/pprof"
 	"sync"
 )
 
@@ -39,25 +41,37 @@ func schedule(jobName string, mapFiles []string, nReduce int, phase jobPhase, re
 		wg.Add(1)
 		go func(ii int) {
 			defer wg.Done()
-			w := <-registerChan
 			var file string
 			if phase == mapPhase {
 				file = mapFiles[ii]
 			}
-			arg := &DoTaskArgs{
-				JobName:       jobName,
-				File:          file,
-				Phase:         phase,
-				TaskNumber:    ii,
-				NumOtherPhase: n_other,
+
+			for {
+				w := <-registerChan
+
+				arg := &DoTaskArgs{
+					JobName:       jobName,
+					File:          file,
+					Phase:         phase,
+					TaskNumber:    ii,
+					NumOtherPhase: n_other,
+				}
+				succeed := call(w, "Worker.DoTask", arg, nil)
+				if succeed {
+					go func() {
+						registerChan <- w
+					}()
+					break
+				}
+				println("redoTask", arg, w)
 			}
-			_ = call(w, "Worker.DoTask", arg, nil)
-			go func() {
-				registerChan <- w
-			}()
 		}(i)
 	}
 
 	wg.Wait()
 	fmt.Printf("Schedule: %v done\n", phase)
+}
+func init() {
+	// http.ListenAndServe(":9999", nil)
+
 }
