@@ -209,6 +209,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// rf.curTerm >= lastLog.Term
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+
 	reply.VoteGranted = false
 
 	reply.Term = rf.curTerm
@@ -239,7 +240,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.state = stateFollower
 		rf.voteFor = args.CandidateID
 		rf.leaderCh <- struct{}{}
-		DPrintf("%d leaderCh<-.\n", rf.me)
 	}
 
 }
@@ -526,7 +526,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 				}
 
 			case stateLeader:
-				DPrintf("leader %d heart beat", rf.me)
 				for i := range rf.peers {
 					if rf.me == i {
 						continue
