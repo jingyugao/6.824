@@ -81,6 +81,7 @@ func make_config(t *testing.T, n int, unreliable bool) *config {
 	cfg.net.LongDelays(true)
 
 	// create a full set of Rafts.
+	DPrintf("make raft with %d peers.\n", cfg.n)
 	for i := 0; i < cfg.n; i++ {
 		cfg.logs[i] = map[int]int{}
 		cfg.start1(i)
@@ -201,7 +202,6 @@ func (cfg *config) start1(i int) {
 			}
 		}
 	}()
-
 	rf := Make(ends, i, cfg.saved[i], applyCh)
 
 	cfg.mu.Lock()
