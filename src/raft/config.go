@@ -375,6 +375,8 @@ func (cfg *config) nCommitted(index int) (int, interface{}) {
 			}
 			count += 1
 			cmd = cmd1
+		} else {
+			// DPrintf("not exist log of %d,%d", i, index)
 		}
 	}
 	return count, cmd
@@ -452,8 +454,8 @@ func (cfg *config) one(cmd int, expectedServers int, retry bool) int {
 			t1 := time.Now()
 			for time.Since(t1).Seconds() < 2 {
 				nd, cmd1 := cfg.nCommitted(index)
+				// DPrintf("// committed %d %v\n", nd, cmd1)
 				if nd > 0 && nd >= expectedServers {
-					// committed
 					if cmd2, ok := cmd1.(int); ok && cmd2 == cmd {
 						// and it was the command we submitted.
 						return index
@@ -462,13 +464,13 @@ func (cfg *config) one(cmd int, expectedServers int, retry bool) int {
 				time.Sleep(20 * time.Millisecond)
 			}
 			if retry == false {
-				cfg.t.Fatalf("one(%v) failed to reach agreement", cmd)
+				cfg.t.Fatalf("one(%v) failed1 to reach agreement", cmd)
 			}
 		} else {
 			time.Sleep(50 * time.Millisecond)
 		}
 	}
-	cfg.t.Fatalf("one(%v) failed to reach agreement", cmd)
+	cfg.t.Fatalf("one(%v) failed2 to reach agreement", cmd)
 	return -1
 }
 
