@@ -52,33 +52,12 @@ type ApplyMsg struct {
 //
 // A Go object implementing a single Raft peer.
 //
-var (
-	peer [5]*Raft
-)
-
-// func printState() {
-// 	fmt.Printf("sysState\n")
-// 	fmt.Printf("peer\tstate\tlastIndex\tlastTerm")
-// }
 
 type LogEntry struct {
 	Index  int
 	Term   int
 	Leader int
 	Data   interface{}
-}
-
-// is this up-to-date to that?
-func (this *LogEntry) isUpToDate(that *LogEntry) bool {
-	if this.Term > that.Term {
-		return true
-	}
-	if this.Term == that.Term &&
-		this.Index >= that.Index {
-		return true
-	}
-
-	return false
 }
 
 const (
@@ -98,20 +77,25 @@ type Raft struct {
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
-	cmdCh         chan interface{}
-	beatCh        chan struct{}
-	voteCh        chan struct{}
+
+	beatCh chan struct{}
+
+	curTerm       int
 	state         int32
 	electDuration time.Duration
 	winChan       chan struct{}
-	curTerm       int
-	voteFor       int
-	voteCount     int32
-	log           []LogEntry
-	logMu         sync.Mutex
-	commitCh      chan int
-	commitIndex   int
-	lastApplied   int // used for application
+
+	voteFor   int
+	voteCount int32
+	voteCh    chan struct{}
+
+	logCh chan LogEntry
+	log   []LogEntry
+	logMu sync.Mutex
+
+	commitCh    chan int
+	commitIndex int
+	lastApplied int // used for application
 	// just for leader
 	nextIndex  []int
 	matchIndex []int
@@ -342,7 +326,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		reply.NextIndex = rf.lastIndex() + 1
 		return
 	}
-	rf.beatCh <- struct{}{}
+
+	// rf.beatCh <- struct{}{}
 
 	// RPC request or response contains term T > currentTerm:
 	// set currentTerm = T
@@ -359,9 +344,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// }
 
 	// receiving AppendEntries RPC from current leader
-	// if args.Term == rf.curTerm && args.LeaderID == rf.voteFor {
-	// 	rf.beatCh <- struct{}{}
-	// }
+	if args.Term == rf.curTerm && args.LeaderID == rf.voteFor {
+		rf.beatCh <- struct{}{}
+	}
 
 	if args.PrevLogIndex > rf.lastIndex() {
 		reply.NextIndex = rf.lastIndex() + 1
@@ -610,7 +595,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.persister = persister
 	rf.me = me
 	rf.log = append(rf.log, LogEntry{})
-	rf.cmdCh = make(chan interface{}, 100)
+	rf.logCh = make(chan LogEntry, 100)
 	rf.beatCh = make(chan struct{}, 100)
 	rf.winChan = make(chan struct{}, 100)
 	rf.voteCh = make(chan struct{}, 100)
@@ -659,6 +644,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 				rf.mu.Unlock()
 
 				select {
+				case <-rf.voteCh:
 				case <-rf.beatCh:
 					// become follower
 					// DPrintf("%d become follwer of.\n", rf.me)
@@ -686,25 +672,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			case stateLeader:
 				// send initial empty AppendEntries RPCs (heartbeat) to each server
 				// DPrintf("%d heart beat.\n", rf.me)
-				rf.boatcastAppendEntries()
-				// for i := range rf.peers {
-				// 	if rf.me == i {
-				// 		continue
-				// 	}
-				// 	go func(t int) {
-				// 		reply := &AppendEntriesReply{}
-				// 		args := &AppendEntriesArgs{
-				// 			Term:         rf.curTerm,
-				// 			LeaderID:     rf.me,
-				// 			PrevLogIndex: rf.nextIndex[t] - 1,
-				// 			PrevLogTerm:  rf.log[rf.nextIndex[t]-1].Term,
-				// 			LeaderCommit: rf.commitIndex,
-				// 			Entries:      rf.log[rf.nextIndex[t]:],
-				// 		}
-				// 		ok := rf.sendAppendEntries(t, args, reply)
-				// 		_ = ok
-				// 	}(i)
-				// }
+				go rf.boatcastAppendEntries()
 				// repeat during idle periods to prevent election timeouts
 				time.Sleep(heaetBeatInterval)
 			}
