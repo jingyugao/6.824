@@ -318,6 +318,8 @@ type AppendEntriesReply struct {
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+
+	fn := "AppendEntries"
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	defer rf.persist()
@@ -362,17 +364,25 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	reply.Success = true
 
+	if len(args.Entries) > 0 && args.Entries[0].Index <= rf.commitIndex {
+		glog.Warningf("[%s] %d to %d overwrite committed log, %+v, %+v.\n", fn, args.LeaderID, rf.me, args.Entries, rf.log)
+	}
 	// 3. If an existing entry conflicts with a new one (same index
 	// but different terms), delete the existing entry and all that
 	// follow it
-	// 4. Append any new entries not already in the log
-	rf.log = append(rf.log[:args.PrevLogIndex+1], args.Entries...)
+	for i, e := range args.Entries {
+		if e.Index < len(rf.log) && e.Term == rf.log[e.Index].Term {
+			continue
+		}
+		// 4. Append any new entries not already in the log
+		rf.log = append(rf.log[:e.Index], args.Entries[i:]...)
+	}
+
 	reply.NextIndex = rf.lastIndex() + 1
 
 	// 5. If leaderCommit > commitIndex, set commitIndex =
 	// min(leaderCommit, index of last new entry)
 	if args.LeaderCommit > rf.commitIndex {
-		// DPrintf("update local cmtIdx of %d from %d to min(%d,%d) .\n", rf.me, rf.commitIndex, args.LeaderCommit, rf.lastIndex())
 		rf.commitCh <- min(args.LeaderCommit, rf.lastIndex())
 	}
 }
