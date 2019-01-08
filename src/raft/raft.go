@@ -112,7 +112,11 @@ func (rf *Raft) GetState() (int, bool) {
 	// Your code here (2A).
 	return rf.curTerm, rf.state == stateLeader
 }
+func (rf *Raft) IsLeader() bool {
 
+	// Your code here (2A).
+	return rf.state == stateLeader
+}
 func (rf *Raft) lastIndex() int {
 	return rf.log[len(rf.log)-1].Index
 }
