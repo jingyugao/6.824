@@ -17,6 +17,31 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 	return
 }
 
+type DB struct {
+	mu   sync.RWMutex
+	data map[string]string
+}
+
+func (db *DB) Put(k string, v string) {
+	db.mu.Lock()
+	db.data[k] = v
+	db.mu.Unlock()
+}
+
+func (db *DB) Append(k string, v string) {
+	db.mu.Lock()
+	db.data[k] += v
+	db.mu.Unlock()
+}
+
+func (db *DB) Get(k string) (val string, ok bool) {
+	db.mu.RLock()
+	val, ok = db.data[k]
+	db.mu.RUnlock()
+
+	return
+}
+
 type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
@@ -27,6 +52,11 @@ type Op struct {
 	ID    int64
 }
 
+type pair struct {
+	v  string
+	ok bool
+}
+
 type KVServer struct {
 	mu      sync.Mutex
 	me      int
@@ -34,49 +64,71 @@ type KVServer struct {
 	applyCh chan raft.ApplyMsg
 
 	maxraftstate int // snapshot if log grows this big
-	waiterLock   map[int]*sync.Mutex
-	waiter       map[int]*sync.Cond
-	// Your definitions here.
-	data map[string]string
+
+	waiter map[int]chan interface{}
+	db     *DB
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
+	DPrintf("KVServer %d Get req %+v\n", kv.me, args)
+	defer DPrintf("KVServer %d Get reply %+v\n", kv.me, reply)
+
 	kv.mu.Lock()
 
-	wal := &Op{Kind: "Get", Key: args.Key, ID: args.ID}
+	wal := Op{Kind: "Get", Key: args.Key, ID: args.ID}
 	idx, _, isLeader := kv.rf.Start(wal)
 	if !isLeader {
 		reply.WrongLeader = true
+		leader := kv.rf.Leader()
 		kv.mu.Unlock()
+
+		DPrintf("KVServer %d Get %+v Leader not me but %d \n", kv.me, args, leader)
 		return
 	}
-	kv.waiterLock[idx] = new(sync.Mutex)
-	kv.waiter[idx] = sync.NewCond(kv.waiterLock[idx])
+
+	ch := make(chan interface{})
+	kv.waiter[idx] = ch
 	kv.mu.Unlock()
 
-	kv.waiterLock[idx].Lock()
-	kv.waiter[idx].Wait()
+	p, ok := (<-ch).(pair)
+	if !ok {
+		panic("err 	p, ok := (<-ch).(pair)")
+	}
 
+	reply.ID = args.ID
+	if !p.ok {
+		reply.Err = ErrNoKey
+		return
+	}
+	reply.Value = p.v
+	return
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
+	DPrintf("KVServer %d PutAppend req %+v.\n", kv.me, args)
+	defer DPrintf("KVServer %d PutAppend reply %+v.\n", kv.me, reply)
+
 	kv.mu.Lock()
 
-	wal := &Op{Kind: "Get", Key: args.Key, ID: args.ID}
+	wal := Op{Kind: args.Op, Key: args.Key, Value: args.Value, ID: args.ID}
 	idx, _, isLeader := kv.rf.Start(wal)
 	if !isLeader {
 		reply.WrongLeader = true
+		leader := kv.rf.Leader()
 		kv.mu.Unlock()
+
+		DPrintf("KVServer %d Get %+v Leader not me but %d \n", kv.me, args, leader)
 		return
 	}
-	kv.waiterLock[idx] = new(sync.Mutex)
-	kv.waiter[idx] = sync.NewCond(kv.waiterLock[idx])
+	ch := make(chan interface{})
+	kv.waiter[idx] = ch
 	kv.mu.Unlock()
 
-	kv.waiterLock[idx].Lock()
-	kv.waiter[idx].Wait()
+	<-ch
+	reply.ID = args.ID
+	return
 }
 
 //
@@ -114,13 +166,53 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.maxraftstate = maxraftstate
 
 	// You may need initialization code here.
-
+	kv.db = &DB{data: make(map[string]string), mu: sync.RWMutex{}}
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
-	kv.waiter = make(map[int]*sync.Cond)
-	kv.waiterLock = make(map[int]*sync.Locker)
+	kv.waiter = make(map[int]chan interface{})
 
-	// You may need initialization code here.
+	go func() {
+		for {
+			select {
+			case applyMsg := <-kv.applyCh:
+				DPrintf("get applyMsg of %+v\n", applyMsg)
+				if applyMsg.CommandIndex == 0 {
+					continue
+				}
+				// reply to client
+				kv.mu.Lock()
+				ch, waiting := kv.waiter[applyMsg.CommandIndex]
+				kv.mu.Unlock()
+
+				// apply for SM
+				op, ok := applyMsg.Command.(Op)
+				if !ok {
+					continue
+					// panic()
+				}
+
+				switch op.Kind {
+				case "Get":
+					v, ok := kv.db.Get(op.Key)
+					if waiting {
+						ch <- pair{v: v, ok: ok}
+					}
+				case "Put":
+					kv.db.Put(op.Key, op.Value)
+					if waiting {
+						ch <- struct{}{}
+					}
+				case "Append":
+					kv.db.Append(op.Key, op.Value)
+					ch <- struct{}{}
+				default:
+					DPrintf("err op kind :%s\n", op.Kind)
+					panic("err op")
+				}
+
+			}
+		}
+	}()
 
 	return kv
 }
