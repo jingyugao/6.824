@@ -12,9 +12,9 @@ var reqID int64
 type Clerk struct {
 	servers []*labrpc.ClientEnd
 	// You will have to modify this struct.
-	kvs []*KVServer
-
-	ID int64
+	kvs   []*KVServer
+	ReqID int64
+	ID    int64
 }
 
 func nrand() int64 {
@@ -58,19 +58,18 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 func (ck *Clerk) Get(key string) string {
 
 	// You will have to modify this function.
-	rID := atomic.AddInt64(&reqID, 1)
+	args := &GetArgs{
+		Key:   key,
+		ID:    ck.ID,
+		ReqID: atomic.AddInt64(&ck.ReqID, 1),
+	}
 	for i := 0; ; {
 		DPrintf("%d Get key %s \n", i, key)
 		i = (i + 1) % len(ck.servers)
-		args := &GetArgs{
-			Key:   key,
-			ID:    ck.ID,
-			ReqID: rID,
-		}
 		reply := &GetReply{}
 		ok := ck.servers[i].Call("KVServer.Get", args, reply)
-		if ok && reply.Err == "" && reply.WrongLeader == false {
-			DPrintf("PutAppend resp.\n")
+		if ok && reply.Err == OK && reply.WrongLeader == false {
+			DPrintf("Get key resp.\n")
 			return reply.Value
 		}
 	}
@@ -90,7 +89,7 @@ func (ck *Clerk) Get(key string) string {
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
 	DPrintf("PutAppend [%s, %s, %s].\n", key, value, op)
-	rID := atomic.AddInt64(&reqID, 1)
+	rID := atomic.AddInt64(&ck.ReqID, 1)
 	for i := 0; ; i++ {
 		DPrintf("%d Put key %s \n", i, key)
 
@@ -103,8 +102,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		}
 		reply := &PutAppendReply{}
 		ok := ck.servers[i%len(ck.servers)].Call("KVServer.PutAppend", args, reply)
-
-		if ok && reply.Err == "" && reply.WrongLeader == false {
+		if ok && reply.Err == OK && reply.WrongLeader == false {
 			DPrintf("PutAppend resp.\n")
 			return
 		}

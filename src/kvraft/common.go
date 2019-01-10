@@ -23,8 +23,6 @@ type PutAppendArgs struct {
 type PutAppendReply struct {
 	WrongLeader bool
 	Err         Err
-	ID          int64
-	ReqID       int64
 }
 
 type GetArgs struct {

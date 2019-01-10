@@ -65,7 +65,6 @@ const (
 	stateCandidate = 2
 	stateFollower  = 3
 
-	batchSize = 100
 	chunkSize = 1024
 
 	heaetBeatInterval = 50 * time.Millisecond
@@ -534,13 +533,13 @@ func (rf *Raft) heartBeat() {
 			idx0 := rf.log[0].Index
 			plIdx := rf.nextIndex[i] - 1
 			offset := plIdx - idx0
-			endIdx := min(len(rf.log), offset+1+batchSize)
+
 			args := AppendEntriesArgs{
 				Term:         rf.curTerm,
 				LeaderID:     rf.me,
 				PrevLogIndex: plIdx,
 				PrevLogTerm:  rf.log[offset].Term,
-				Entries:      rf.log[offset+1 : endIdx],
+				Entries:      rf.log[offset+1:],
 				LeaderCommit: rf.commitIndex,
 			}
 			go rf.sendAppendEntries(i, &args, &AppendEntriesReply{})
