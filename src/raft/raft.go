@@ -22,7 +22,6 @@ import (
 	"encoding/gob"
 	"flag"
 	"math/rand"
-	"os"
 
 	"labrpc"
 	"sync/atomic"
@@ -73,22 +72,10 @@ const (
 )
 
 type Snapshot struct {
-	fileName          string
 	lastIncludedIndex int
 	lastIncludedTerm  int
-	file              os.File
-	data              []byte
-	chunkOK           map[int]bool
-}
 
-func (sp *Snapshot) Write(offset int, data []byte) {
-	chunkID := offset / chunkSize
-	if !sp.chunkOK[chunkID] {
-		if len(sp.data) < offset+len(data) {
-			panic("err chunk size")
-		}
-	}
-
+	data []byte
 }
 
 type Raft struct {
@@ -100,8 +87,9 @@ type Raft struct {
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
-	newSp    *Snapshot
-	oldSp    *Snapshot
+	newSp *Snapshot
+	oldSp *Snapshot
+
 	followCh chan struct{}
 
 	curTerm       int
@@ -169,6 +157,14 @@ func (rf *Raft) persist() {
 	e.Encode(rf.log)
 	data := w.Bytes()
 	rf.persister.SaveRaftState(data)
+}
+func (rf *Raft) MakeSnapshot(sp *Snapshot) {
+	// dont contain the lastCmtIdx log
+	endIdx := rf.commitIndex
+
+	rf.log = rf.log[endIdx:]
+	rf.newSp = sp
+
 }
 
 //
@@ -344,18 +340,18 @@ type AppendEntriesReply struct {
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 
-	fn := "AppendEntries"
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-	defer rf.persist()
-	reply.Success = false
-
 	// 1. Reply false if term < currentTerm
 	if args.Term < rf.curTerm {
 		reply.Term = rf.curTerm
 		reply.NextIndex = rf.lastIndex() + 1
 		return
 	}
+
+	fn := "AppendEntries"
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	defer rf.persist()
+	reply.Success = false
 
 	// RPC request or response contains term T > currentTerm:
 	// set currentTerm = T, convert to follower
@@ -456,10 +452,11 @@ type InstallSnapshotArgs struct {
 	LeaderID          int
 	LastIncludedIndex int
 	LastIncludedTerm  int
-	Offset            int
-	Data              []byte
-	Size              int
-	Done              bool
+	FirstLog          LogEntry
+	// Offset            int
+	Data []byte
+	Size int
+	Done bool
 }
 
 type InstallSnapshotReply struct {
@@ -472,20 +469,29 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		return
 	}
 
-	if args.Offset == 0 {
-		sp := &Snapshot{
-			lastIncludedIndex: args.LastIncludedIndex,
-			lastIncludedTerm:  args.LastIncludedTerm,
-			data:              make([]byte, args.Size),
-		}
-		rf.newSp = sp
+	// if args.Offset == 0 {
+	// 	sp := &Snapshot{
+	// 		lastIncludedIndex: args.LastIncludedIndex,
+	// 		lastIncludedTerm:  args.LastIncludedTerm,
+	// 		data:              make([]byte, args.Size),
+	// 	}
+	// 	rf.newSp = sp
+	// }
+	rf.newSp = &Snapshot{
+		lastIncludedIndex: args.LastIncludedIndex,
+		lastIncludedTerm:  args.LastIncludedTerm,
+		data:              make([]byte, args.Size),
 	}
-	rf.newSp.data = args.Data
-	// rf.newSp.Write(args.Offset, args.Data)
+
 	if args.Done {
 		rf.oldSp = rf.newSp
 		idx0 := rf.log[0].Index
-		rf.log = rf.log[args.LastIncludedIndex-idx0:]
+		if rf.lastIndex() < args.LastIncludedIndex {
+			rf.log = rf.log[:1]
+			rf.log[0] = args.FirstLog
+		} else {
+			rf.log = rf.log[args.LastIncludedIndex+1-idx0:]
+		}
 	}
 }
 
@@ -615,10 +621,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.persister = persister
 	rf.me = me
 	rf.log = append(rf.log, LogEntry{})
-	rf.logCh = make(chan LogEntry, 100)
-	rf.followCh = make(chan struct{}, 100)
-	rf.winChan = make(chan struct{}, 100)
-	rf.commitCh = make(chan int, 100)
+	rf.logCh = make(chan LogEntry, 10000)
+	rf.followCh = make(chan struct{}, 10000)
+	rf.winChan = make(chan struct{}, 10000)
+	rf.commitCh = make(chan int, 10000)
 	rf.electDuration = time.Duration((rand.Intn(150) + 150)) * time.Millisecond
 	// Your initialization code here (2A, 2B, 2C).
 	rf.readPersist(persister.ReadRaftState())
@@ -698,20 +704,19 @@ func Make(peers []*labrpc.ClientEnd, me int,
 				if cmtIdx <= rf.commitIndex {
 					break
 				}
-				rf.mu.Lock()
+
 				rf.commitIndex = cmtIdx
 				if cmtIdx > rf.lastApplied {
+					idx0 := rf.log[0].Index
 					for i := rf.lastApplied + 1; i <= cmtIdx; i++ {
-						idx0 := rf.log[0].Index
 						applyCh <- ApplyMsg{
 							CommandValid: true,
 							Command:      rf.log[i-idx0].Data,
-							CommandIndex: i,
+							CommandIndex: rf.log[i-idx0].Index,
 						}
 					}
 					rf.lastApplied = cmtIdx
 				}
-				rf.mu.Unlock()
 
 			}
 		}

@@ -4,16 +4,17 @@ import (
 	"crypto/rand"
 	"labrpc"
 	"math/big"
-	"raft"
 	"sync/atomic"
-	"time"
 )
+
+var reqID int64
 
 type Clerk struct {
 	servers []*labrpc.ClientEnd
 	// You will have to modify this struct.
-	kvs   []*KVServer
-	ReqID int64
+	kvs []*KVServer
+
+	ID int64
 }
 
 func nrand() int64 {
@@ -24,14 +25,21 @@ func nrand() int64 {
 }
 
 func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
+	// ck := new(Clerk)
+	// ck.servers = servers
+	// ck.kvs = make([]*KVServer, len(servers))
+	// // You'll have to add code here.
+
+	// for i := range servers {
+	// 	ck.kvs[i] = StartKVServer(servers, i, &raft.Persister{}, -1)
+	// }
+	// time.Sleep(3 * time.Second)
+	// return ck
 	ck := new(Clerk)
 	ck.servers = servers
-	ck.kvs = make([]*KVServer, len(servers))
 	// You'll have to add code here.
-	for i := range servers {
-		ck.kvs[i] = StartKVServer(servers, i, &raft.Persister{}, -1)
-	}
-	time.Sleep(3 * time.Second)
+	ck.ID = nrand()
+
 	return ck
 }
 
@@ -50,17 +58,19 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 func (ck *Clerk) Get(key string) string {
 
 	// You will have to modify this function.
-
+	rID := atomic.AddInt64(&reqID, 1)
 	for i := 0; ; {
 		DPrintf("%d Get key %s \n", i, key)
 		i = (i + 1) % len(ck.servers)
 		args := &GetArgs{
-			Key: key,
-			ID:  atomic.AddInt64(&ck.ReqID, 1),
+			Key:   key,
+			ID:    ck.ID,
+			ReqID: rID,
 		}
 		reply := &GetReply{}
 		ok := ck.servers[i].Call("KVServer.Get", args, reply)
 		if ok && reply.Err == "" && reply.WrongLeader == false {
+			DPrintf("PutAppend resp.\n")
 			return reply.Value
 		}
 	}
@@ -80,18 +90,19 @@ func (ck *Clerk) Get(key string) string {
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
 	DPrintf("PutAppend [%s, %s, %s].\n", key, value, op)
+	rID := atomic.AddInt64(&reqID, 1)
+	for i := 0; ; i++ {
+		DPrintf("%d Put key %s \n", i, key)
 
-	for i := 0; ; {
-		DPrintf("%d Get key %s \n", i, key)
-		i = (i + 1) % len(ck.servers)
 		args := &PutAppendArgs{
 			Key:   key,
 			Value: value,
 			Op:    op,
-			ID:    atomic.AddInt64(&ck.ReqID, 1),
+			ID:    ck.ID,
+			ReqID: rID,
 		}
 		reply := &PutAppendReply{}
-		ok := ck.servers[i].Call("KVServer.PutAppend", args, reply)
+		ok := ck.servers[i%len(ck.servers)].Call("KVServer.PutAppend", args, reply)
 
 		if ok && reply.Err == "" && reply.WrongLeader == false {
 			DPrintf("PutAppend resp.\n")

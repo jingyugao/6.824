@@ -4,8 +4,11 @@ import (
 	"labgob"
 	"labrpc"
 	"log"
+	"net/http"
+	_ "net/http/pprof"
 	"raft"
 	"sync"
+	"time"
 )
 
 const Debug = 0
@@ -50,6 +53,7 @@ type Op struct {
 	Key   string
 	Value string
 	ID    int64
+	ReqID int64
 }
 
 type pair struct {
@@ -64,71 +68,89 @@ type KVServer struct {
 	applyCh chan raft.ApplyMsg
 
 	maxraftstate int // snapshot if log grows this big
-
-	waiter map[int]chan interface{}
-	db     *DB
+	ack          map[int64]int64
+	waiter       map[int64]chan interface{}
+	db           *DB
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
 	DPrintf("KVServer %d Get req %+v\n", kv.me, args)
 	defer DPrintf("KVServer %d Get reply %+v\n", kv.me, reply)
-
 	kv.mu.Lock()
-
-	wal := Op{Kind: "Get", Key: args.Key, ID: args.ID}
+	wal := Op{Kind: "Get", Key: args.Key, ID: args.ID, ReqID: args.ReqID}
 	idx, _, isLeader := kv.rf.Start(wal)
+	DPrintf("KVServer %d Get req idx:%d, %+v\n", kv.me, idx, args)
+
 	if !isLeader {
 		reply.WrongLeader = true
 		leader := kv.rf.Leader()
 		kv.mu.Unlock()
-
 		DPrintf("KVServer %d Get %+v Leader not me but %d \n", kv.me, args, leader)
 		return
 	}
-
-	ch := make(chan interface{})
-	kv.waiter[idx] = ch
-	kv.mu.Unlock()
-
-	p, ok := (<-ch).(pair)
-	if !ok {
-		panic("err 	p, ok := (<-ch).(pair)")
+	if _, ok := kv.waiter[args.ReqID]; !ok {
+		kv.waiter[args.ReqID] = make(chan interface{}, 100)
 	}
-
+	ch := kv.waiter[args.ReqID]
+	kv.mu.Unlock()
 	reply.ID = args.ID
-	if !p.ok {
-		reply.Err = ErrNoKey
+	reply.ReqID = args.ReqID
+	select {
+	case i := <-ch:
+		p, ok := i.(pair)
+		if !ok {
+			reply.Err = ErrTimeout
+			return
+		}
+		if !p.ok {
+			reply.Err = ErrNoKey
+			return
+		}
+		reply.Value = p.v
+		return
+	case <-time.After(1000 * time.Millisecond):
+		DPrintf("timeout\n")
+		reply.Err = ErrTimeout
 		return
 	}
-	reply.Value = p.v
-	return
+
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
-	DPrintf("KVServer %d PutAppend req %+v.\n", kv.me, args)
 	defer DPrintf("KVServer %d PutAppend reply %+v.\n", kv.me, reply)
-
 	kv.mu.Lock()
-
-	wal := Op{Kind: args.Op, Key: args.Key, Value: args.Value, ID: args.ID}
+	wal := Op{Kind: args.Op, Key: args.Key, Value: args.Value, ID: args.ID, ReqID: args.ReqID}
 	idx, _, isLeader := kv.rf.Start(wal)
+	DPrintf("KVServer %d PutAppend req idx:%d, %+v.\n", kv.me, idx, args)
+
 	if !isLeader {
 		reply.WrongLeader = true
 		leader := kv.rf.Leader()
 		kv.mu.Unlock()
-
 		DPrintf("KVServer %d Get %+v Leader not me but %d \n", kv.me, args, leader)
 		return
 	}
-	ch := make(chan interface{})
-	kv.waiter[idx] = ch
+	if _, ok := kv.waiter[args.ReqID]; !ok {
+		kv.waiter[args.ReqID] = make(chan interface{}, 100)
+	}
+	ch := kv.waiter[args.ReqID]
 	kv.mu.Unlock()
-
-	<-ch
 	reply.ID = args.ID
-	return
+	reply.ReqID = args.ReqID
+	select {
+	case v := <-ch:
+		if _, ok := v.(int); !ok {
+			reply.Err = ErrTimeout
+		}
+		return
+	case <-time.After(1000 * time.Millisecond):
+		DPrintf("timeout\n")
+		reply.Err = ErrTimeout
+		return
+	}
+
 }
 
 //
@@ -169,8 +191,8 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.db = &DB{data: make(map[string]string), mu: sync.RWMutex{}}
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
-	kv.waiter = make(map[int]chan interface{})
-
+	kv.waiter = make(map[int64]chan interface{})
+	kv.ack = make(map[int64]int64)
 	go func() {
 		for {
 			select {
@@ -180,9 +202,6 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 					continue
 				}
 				// reply to client
-				kv.mu.Lock()
-				ch, waiting := kv.waiter[applyMsg.CommandIndex]
-				kv.mu.Unlock()
 
 				// apply for SM
 				op, ok := applyMsg.Command.(Op)
@@ -190,21 +209,32 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 					continue
 					// panic()
 				}
+				kv.mu.Lock()
+				if _, ok := kv.waiter[op.ReqID]; !ok {
+					kv.waiter[op.ReqID] = make(chan interface{}, 100)
+				}
+				ch := kv.waiter[op.ReqID]
+				val, ok := kv.ack[op.ReqID]
+				if ok && val <= op.ReqID {
+					// go func() { ch <- false }()
+					kv.mu.Unlock()
+					continue
+				}
+				kv.ack[op.ReqID] = op.ReqID
+				kv.mu.Unlock()
 
 				switch op.Kind {
 				case "Get":
 					v, ok := kv.db.Get(op.Key)
-					if waiting {
-						ch <- pair{v: v, ok: ok}
-					}
+
+					ch <- pair{ok: ok, v: v}
+
 				case "Put":
 					kv.db.Put(op.Key, op.Value)
-					if waiting {
-						ch <- struct{}{}
-					}
+					ch <- 1
 				case "Append":
 					kv.db.Append(op.Key, op.Value)
-					ch <- struct{}{}
+					ch <- 1
 				default:
 					DPrintf("err op kind :%s\n", op.Kind)
 					panic("err op")
@@ -215,4 +245,9 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	}()
 
 	return kv
+}
+
+func init() {
+	go http.ListenAndServe("0.0.0.0:6060", nil)
+
 }
