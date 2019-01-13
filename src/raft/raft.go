@@ -183,20 +183,39 @@ func (rf *Raft) MakeSnapshot(lastIncludedIndex int, data []byte) {
 		return
 	}
 
-	idx0 := rf.log[0].Index
+	// idx0 := rf.log[0].Index
 
-	lastIncludedTerm := rf.log[lastIncludedIndex-idx0].Term
-	rf.log = append([]LogEntry{
-		LogEntry{Index: lastIncludedIndex,
-			Term: lastIncludedTerm},
-	}, rf.log[lastIncludedIndex-idx0+1:]...)
+	// lastIncludedTerm := rf.log[lastIncludedIndex-idx0].Term
+	// rf.log = append([]LogEntry{
+	// 	LogEntry{Index: lastIncludedIndex,
+	// 		Term: lastIncludedTerm},
+	// }, rf.log[lastIncludedIndex-idx0+1:]...)
 
-	rf.newSp = Snapshot{
-		LastIncludedIndex: lastIncludedIndex,
-		LastIncludedTerm:  lastIncludedTerm,
-		data:              data,
+	// rf.newSp = Snapshot{
+	// 	LastIncludedIndex: lastIncludedIndex,
+	// 	LastIncludedTerm:  lastIncludedTerm,
+	// 	data:              data,
+	// }
+
+	baseIndex := rf.log[0].Index
+	lastIndex := rf.lastIndex()
+	index := lastIncludedIndex
+	if index <= baseIndex || index > lastIndex {
+		// in case having installed a snapshot from leader before snapshotting
+		// second condition is a hack
+		return
 	}
-	rf.persistAll()
+
+	var newLogEntries []LogEntry
+
+	newLogEntries = append(newLogEntries, LogEntry{Index: index, Term: rf.log[index-baseIndex].Term})
+
+	for i := index + 1; i <= lastIndex; i++ {
+		newLogEntries = append(newLogEntries, rf.log[i-baseIndex])
+	}
+
+	rf.log = newLogEntries
+	rf.persist()
 
 	// fmt.Printf("MakeSnapshot:%+v\n", rf.log)
 }
@@ -240,6 +259,12 @@ func (rf *Raft) readPersistSp(data []byte) {
 	if err != nil {
 		panic(err)
 	}
+
+	rf.commitIndex = rf.newSp.LastIncludedIndex
+	rf.lastApplied = rf.newSp.LastIncludedIndex
+
+	rf.log = truncateLog(rf.newSp.LastIncludedIndex, rf.newSp.LastIncludedTerm, rf.log)
+
 }
 
 //
@@ -389,6 +414,10 @@ type AppendEntriesReply struct {
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+	fn := "AppendEntries"
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	defer rf.persist()
 
 	// 1. Reply false if term < currentTerm
 	if args.Term < rf.curTerm {
@@ -396,11 +425,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		reply.NextIndex = rf.lastIndex() + 1
 		return
 	}
-
-	fn := "AppendEntries"
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-	defer rf.persist()
 
 	reply.Success = false
 
@@ -426,21 +450,46 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 
 	idx0 := rf.log[0].Index
-	if args.PrevLogIndex < idx0 {
-		reply.NextIndex = rf.lastIndex() + 1
-		return
-	}
+	// if args.PrevLogIndex < idx0 {
+	// 	reply.NextIndex = rf.lastIndex() + 1
+	// 	return
+	// }
 
-	if rf.log[args.PrevLogIndex-idx0].Term != args.PrevLogTerm {
-		for i := args.PrevLogIndex - 1 - idx0; i >= 0; i-- {
-			if rf.log[i].Term != rf.log[args.PrevLogIndex-idx0].Term {
-				reply.NextIndex = i + 1 + idx0
-				return
+	// if rf.log[args.PrevLogIndex-idx0].Term != args.PrevLogTerm {
+	// 	for i := args.PrevLogIndex - 1 - idx0; i >= 0; i-- {
+	// 		if rf.log[i].Term != rf.log[args.PrevLogIndex-idx0].Term {
+	// 			reply.NextIndex = i + 1 + idx0
+	// 			return
+	// 		}
+	// 	}
+	// 	return
+	// }
+	baseIndex := idx0
+	if args.PrevLogIndex > baseIndex {
+		term := rf.log[args.PrevLogIndex-baseIndex].Term
+		if args.PrevLogTerm != term {
+			for i := args.PrevLogIndex - 1; i >= baseIndex; i-- {
+				if rf.log[i-baseIndex].Term != term {
+					reply.NextIndex = i + 1
+					break
+				}
 			}
+			return
 		}
-		return
 	}
+	if args.PrevLogIndex < baseIndex {
 
+	} else {
+		rf.log = rf.log[:args.PrevLogIndex+1-baseIndex]
+		rf.log = append(rf.log, args.Entries...)
+		reply.Success = true
+		reply.NextIndex = rf.lastIndex() + 1
+	}
+	//println(rf.me,rf.getLastIndex(),reply.NextIndex,rf.log)
+	if args.LeaderCommit > rf.commitIndex {
+		rf.commitCh <- min(args.LeaderCommit, rf.lastIndex())
+	}
+	return
 	reply.Success = true
 
 	if len(args.Entries) > 0 && args.Entries[0].Index <= rf.commitIndex {
@@ -521,10 +570,24 @@ type InstallSnapshotReply struct {
 	Term int
 }
 
+func truncateLog(lastIncludedIndex int, lastIncludedTerm int, log []LogEntry) []LogEntry {
+
+	var newLogEntries []LogEntry
+	newLogEntries = append(newLogEntries, LogEntry{Index: lastIncludedIndex, Term: lastIncludedTerm})
+
+	for index := len(log) - 1; index >= 0; index-- {
+		if log[index].Index == lastIncludedIndex && log[index].Term == lastIncludedTerm {
+			newLogEntries = append(newLogEntries, log[index+1:]...)
+			break
+		}
+	}
+
+	return newLogEntries
+}
 func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	fmt.Println("InstallSnapshot", rf.me, args.LastIncludedIndex)
+	// fmt.Println("InstallSnapshot", rf.me, args.LastIncludedIndex)
 	// 1. Reply immediately if term < currentTerm
 	if args.Term < rf.curTerm {
 		reply.Term = rf.curTerm
@@ -548,17 +611,25 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		LastIncludedTerm:  args.LastIncludedTerm,
 		data:              args.Data,
 	}
-	rf.log = []LogEntry{
-		LogEntry{
-			Index: args.LastIncludedIndex,
-			Term:  args.LastIncludedTerm,
-		},
-	}
+	// rf.log = []LogEntry{
+	// 	LogEntry{
+	// 		Index: args.LastIncludedIndex,
+	// 		Term:  args.LastIncludedTerm,
+	// 	},
+	// }
+
 	// 6. If existing log entry has same index and term as snapshot’s
 	// last included entry, retain log entries following it and reply
-	if args.LastIncludedIndex <= rf.lastIndex() && rf.log[args.LastIncludedIndex-idx0].Term == args.LastIncludedTerm {
-		rf.log = append(rf.log, rf.log[args.LastIncludedIndex-idx0+1:]...)
+	if args.LastIncludedIndex < idx0 {
+		fmt.Println(" args.LastIncludedIndex >= idx0 ")
 	}
+	// if args.LastIncludedIndex >= idx0 && args.LastIncludedIndex <= rf.lastIndex() && rf.log[args.LastIncludedIndex-idx0].Term == args.LastIncludedTerm {
+	// 	rf.log = append(rf.log, rf.log[args.LastIncludedIndex-idx0+1:]...)
+	// }
+	rf.persister.SaveSnapshot(args.Data)
+
+	rf.log = truncateLog(args.LastIncludedIndex, args.LastIncludedTerm, rf.log)
+
 	rf.persistAll()
 
 	rf.commitIndex = args.LastIncludedIndex
@@ -618,7 +689,7 @@ func (rf *Raft) heartBeat() {
 					LeaderID:     rf.me,
 					PrevLogIndex: plIdx,
 					PrevLogTerm:  rf.log[offset].Term,
-					Entries:      rf.log[offset+1:],
+					Entries:      append([]LogEntry{}, rf.log[offset+1:]...),
 					LeaderCommit: rf.commitIndex,
 				}
 				go rf.sendAppendEntries(i, &args, &AppendEntriesReply{})
@@ -626,9 +697,9 @@ func (rf *Raft) heartBeat() {
 				args := InstallSnapshotArgs{
 					Term:              rf.curTerm,
 					LeaderID:          rf.me,
-					LastIncludedIndex: rf.newSp.LastIncludedIndex,
-					LastIncludedTerm:  rf.newSp.LastIncludedTerm,
-					Data:              rf.newSp.data,
+					LastIncludedIndex: rf.log[0].Index,
+					LastIncludedTerm:  rf.log[0].Term,
+					Data:              rf.persister.snapshot,
 					Done:              true,
 				}
 				go rf.sendInstallSnapshot(i, &args, &InstallSnapshotReply{})
@@ -801,24 +872,18 @@ func Make(peers []*labrpc.ClientEnd, me int,
 				}
 				rf.commitIndex = cmtIdx
 
-				if cmtIdx > rf.lastApplied {
-					for i := rf.lastApplied + 1; i <= cmtIdx; i++ {
+				for i := rf.lastApplied + 1; i <= cmtIdx; i++ {
 
-						applyCh <- ApplyMsg{
-							CommandValid: true,
-							Command:      rf.log[i-idx0].Data,
-							CommandIndex: rf.log[i-idx0].Index,
-						}
+					applyCh <- ApplyMsg{
+						CommandValid: true,
+						Command:      rf.log[i-idx0].Data,
+						CommandIndex: rf.log[i-idx0].Index,
 					}
 					rf.lastApplied = cmtIdx
 				}
 
-				// if rf.commitIndex-rf.log[0].Index > 10 {
-				// 	go rf.MakeSnapshot(&Snapshot{
-				// 		LastIncludedIndex: rf.commitIndex,
-				// 		LastIncludedTerm:  rf.log[rf.commitIndex-rf.log[0].Index].Term,
-				// 		data:              nil,
-				// 	})
+				// if rf.commitIndex-rf.log[0].Index > 100 {
+				// 	go rf.MakeSnapshot(rf.commitIndex, nil)
 				// }
 				rf.mu.Unlock()
 			}
