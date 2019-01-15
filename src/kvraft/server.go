@@ -1,9 +1,13 @@
 package raftkv
 
 import (
+	"bytes"
+	"encoding/gob"
 	"labgob"
 	"labrpc"
 	"log"
+	"net/http"
+	_ "net/http/pprof"
 	"raft"
 	"sync"
 	"time"
@@ -38,6 +42,18 @@ func (db *DB) Append(k string, v string) {
 func (db *DB) Get(k string) (val string, ok bool) {
 	db.mu.RLock()
 	val, ok = db.data[k]
+	db.mu.RUnlock()
+	return
+}
+func (db *DB) Load(e *gob.Decoder) (err error) {
+	db.mu.Lock()
+	e.Decode(&db.data)
+	db.mu.Unlock()
+	return
+}
+func (db *DB) Store(e *gob.Encoder) (err error) {
+	db.mu.RLock()
+	err = e.Encode(db.data)
 	db.mu.RUnlock()
 	return
 }
@@ -91,7 +107,26 @@ func (kv *KVServer) AppendEntryToLog(entry Op) bool {
 		return false
 	}
 }
+func (kv *KVServer) MakeSnapshot() (sp []byte) {
 
+	w := new(bytes.Buffer)
+	e := gob.NewEncoder(w)
+	e.Encode(kv.ack)
+	kv.db.Store(e)
+	sp = w.Bytes()
+	return
+}
+func (kv *KVServer) LoadSnapshot(sp []byte) {
+	if sp == nil || len(sp) < 1 { // bootstrap without any state?
+		return
+	}
+
+	r := bytes.NewBuffer(sp)
+	d := gob.NewDecoder(r)
+	d.Decode(&kv.ack)
+	kv.db.Load(d)
+	return
+}
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
 	DPrintf("KVServer %d Get req %+v\n", kv.me, args)
@@ -207,32 +242,41 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 			select {
 			case applyMsg := <-kv.applyCh:
 				// DPrintf("get applyMsg of %+v\n", applyMsg)
-				// // apply for SM
-				op := applyMsg.Command.(Op)
 				kv.mu.Lock()
-				v, ok := kv.ack[op.ID]
-				if !ok || v < op.ReqID {
-					switch op.Kind {
-					case "Get":
-					case "Put":
-						kv.db.Put(op.Key, op.Value)
-					case "Append":
-						kv.db.Append(op.Key, op.Value)
-					default:
-						DPrintf("err op kind :%s\n", op.Kind)
-						panic("err op")
-					}
-					kv.ack[op.ID] = op.ReqID
-				}
+				if !applyMsg.UseSnapshot {
+					// // apply for SM
+					op := applyMsg.Command.(Op)
 
-				if ch, ok := kv.waiter[applyMsg.CommandIndex]; !ok {
-					kv.waiter[applyMsg.CommandIndex] = make(chan Op, 1)
-				} else {
-					select {
-					case <-kv.waiter[applyMsg.CommandIndex]:
-					default:
+					v, ok := kv.ack[op.ID]
+					if !ok || v < op.ReqID {
+						switch op.Kind {
+						case "Get":
+						case "Put":
+							kv.db.Put(op.Key, op.Value)
+						case "Append":
+							kv.db.Append(op.Key, op.Value)
+						default:
+							DPrintf("err op kind :%s\n", op.Kind)
+							panic("err op")
+						}
+						kv.ack[op.ID] = op.ReqID
 					}
-					ch <- op
+
+					if ch, ok := kv.waiter[applyMsg.CommandIndex]; !ok {
+						kv.waiter[applyMsg.CommandIndex] = make(chan Op, 1)
+					} else {
+						select {
+						case <-kv.waiter[applyMsg.CommandIndex]:
+						default:
+						}
+						ch <- op
+					}
+					if kv.maxraftstate != -1 && kv.rf.RaftStateSize() > kv.maxraftstate {
+						sp := kv.MakeSnapshot()
+						go kv.rf.MakeSnapshot(applyMsg.CommandIndex, sp)
+					}
+				} else {
+					kv.LoadSnapshot(applyMsg.Snapshot)
 				}
 				kv.mu.Unlock()
 			}
@@ -240,4 +284,8 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	}()
 
 	return kv
+}
+
+func init() {
+	go http.ListenAndServe("localhost:6060", nil)
 }
