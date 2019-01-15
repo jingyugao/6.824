@@ -21,7 +21,6 @@ import (
 	"bytes"
 	"encoding/gob"
 	"flag"
-	"fmt"
 	"labrpc"
 	"math/rand"
 	"sync/atomic"
@@ -500,7 +499,6 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 	// ignore out-of-date response
 	if rf.state != stateLeader || args.Term != rf.curTerm {
 		glog.Warningf("[%s]: %d recv out-of-date reply from %d", fn, rf.me, server)
-		fmt.Println("rf.state != stateLeader || args.Term != rf.curTerm")
 		return
 	}
 
@@ -508,7 +506,6 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 	//  set currentTerm = T
 	if reply.Term > rf.curTerm {
 		rf.becomeFollower(reply.Term)
-		fmt.Println("rf.state != stateLeader || args.Term != rf.curTerm")
 		return
 	}
 
