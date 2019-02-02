@@ -83,7 +83,8 @@ type KVServer struct {
 	maxraftstate int // snapshot if log grows this big
 	ack          map[int64]int64
 	waiter       map[int]chan Op
-	db           *DB
+	// db           *DB
+	db map[string]string
 }
 
 func (kv *KVServer) AppendEntryToLog(entry Op) bool {
@@ -112,9 +113,18 @@ func (kv *KVServer) MakeSnapshot() (sp []byte) {
 	w := new(bytes.Buffer)
 	e := gob.NewEncoder(w)
 	e.Encode(kv.ack)
-	kv.db.Store(e)
+	e.Encode(kv.db)
 	sp = w.Bytes()
 	return
+}
+func (kv *KVServer) CheckDup(id int64, reqid int64) bool {
+	//kv.mu.Lock()
+	//defer kv.mu.Unlock()
+	v, ok := kv.ack[id]
+	if ok {
+		return v >= reqid
+	}
+	return false
 }
 func (kv *KVServer) LoadSnapshot(sp []byte) {
 	if sp == nil || len(sp) < 1 { // bootstrap without any state?
@@ -124,7 +134,7 @@ func (kv *KVServer) LoadSnapshot(sp []byte) {
 	r := bytes.NewBuffer(sp)
 	d := gob.NewDecoder(r)
 	d.Decode(&kv.ack)
-	kv.db.Load(d)
+	d.Decode(&kv.db)
 	return
 }
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
@@ -133,6 +143,21 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	defer DPrintf("KVServer %d Get reply %+v\n", kv.me, reply)
 
 	wal := Op{Kind: "Get", Key: args.Key, ID: args.ID, ReqID: args.ReqID}
+	ok := kv.AppendEntryToLog(wal)
+	if !ok {
+		reply.WrongLeader = true
+	} else {
+		reply.WrongLeader = false
+		reply.WrongLeader = false
+
+		reply.Err = OK
+		kv.mu.Lock()
+		reply.Value = kv.db[args.Key]
+		kv.ack[args.ID] = args.ReqID
+		//log.Printf("%d get:%v value:%s\n",kv.me,entry,reply.Value)
+		kv.mu.Unlock()
+	}
+	return
 	index, _, isLeader := kv.rf.Start(wal)
 	if !isLeader {
 		reply.WrongLeader = true
@@ -153,7 +178,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		} else {
 			reply.Err = OK
 			kv.mu.Lock()
-			reply.Value, _ = kv.db.Get(args.Key)
+			reply.Value, _ = kv.db[args.Key]
 			kv.ack[args.ID] = args.ReqID
 			kv.mu.Unlock()
 		}
@@ -163,8 +188,28 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	}
 
 }
-
+func (kv *KVServer) Apply(args Op) {
+	switch args.Kind {
+	case "Put":
+		kv.db[args.Key] = args.Value
+	case "Append":
+		kv.db[args.Key] += args.Value
+	}
+	kv.ack[args.ID] = args.ReqID
+}
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
+	// Your code here.
+	entry := Op{Kind: args.Op, Key: args.Key, Value: args.Value, ID: args.ID, ReqID: args.ReqID}
+	ok := kv.AppendEntryToLog(entry)
+	if !ok {
+		reply.WrongLeader = true
+	} else {
+		reply.WrongLeader = false
+		reply.Err = OK
+	}
+}
+
+func (kv *KVServer) PutAppend2(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
 	defer DPrintf("KVServer %d PutAppend reply %+v.\n", kv.me, reply)
 	wal := Op{Kind: args.Op, Key: args.Key, Value: args.Value, ID: args.ID, ReqID: args.ReqID}
@@ -223,6 +268,74 @@ func (kv *KVServer) Kill() {
 // for any long-running work.
 //
 func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister, maxraftstate int) *KVServer {
+	// call gob.Register on structures you want
+	// Go's RPC library to marshall/unmarshall.
+	gob.Register(Op{})
+
+	kv := new(KVServer)
+	kv.me = me
+	kv.maxraftstate = maxraftstate
+
+	// Your initialization code here.
+	kv.db = make(map[string]string)
+	kv.ack = make(map[int64]int64)
+	kv.waiter = make(map[int]chan Op)
+	kv.applyCh = make(chan raft.ApplyMsg, 100)
+	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
+
+	go func() {
+		for {
+			msg := <-kv.applyCh
+			if msg.UseSnapshot {
+				var LastIncludedIndex int
+				var LastIncludedTerm int
+
+				r := bytes.NewBuffer(msg.Snapshot)
+				d := gob.NewDecoder(r)
+
+				kv.mu.Lock()
+				d.Decode(&LastIncludedIndex)
+				d.Decode(&LastIncludedTerm)
+				kv.db = make(map[string]string)
+				kv.ack = make(map[int64]int64)
+				d.Decode(&kv.db)
+				d.Decode(&kv.ack)
+				kv.mu.Unlock()
+			} else {
+				op := msg.Command.(Op)
+				kv.mu.Lock()
+				if !kv.CheckDup(op.ID, op.ReqID) {
+					kv.Apply(op)
+				}
+
+				ch, ok := kv.waiter[msg.CommandIndex]
+				if ok {
+					select {
+					case <-kv.waiter[msg.CommandIndex]:
+					default:
+					}
+					ch <- op
+				} else {
+					kv.waiter[msg.CommandIndex] = make(chan Op, 1)
+				}
+
+				//need snapshot
+				if maxraftstate != -1 && kv.rf.RaftStateSize() > maxraftstate {
+					w := new(bytes.Buffer)
+					e := gob.NewEncoder(w)
+					e.Encode(kv.db)
+					e.Encode(kv.ack)
+					data := w.Bytes()
+					go kv.rf.MakeSnapshot(msg.CommandIndex, data)
+				}
+				kv.mu.Unlock()
+			}
+		}
+	}()
+
+	return kv
+}
+func StartKVServer2(servers []*labrpc.ClientEnd, me int, persister *raft.Persister, maxraftstate int) *KVServer {
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
 	labgob.Register(Op{})
@@ -232,7 +345,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.maxraftstate = maxraftstate
 
 	// You may need initialization code here.
-	kv.db = &DB{data: make(map[string]string), mu: sync.RWMutex{}}
+	kv.db = make(map[string]string)
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 	kv.waiter = make(map[int]chan Op)
@@ -242,43 +355,82 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 			select {
 			case applyMsg := <-kv.applyCh:
 				// DPrintf("get applyMsg of %+v\n", applyMsg)
-				kv.mu.Lock()
+
 				if !applyMsg.UseSnapshot {
 					// // apply for SM
 					op := applyMsg.Command.(Op)
-
-					v, ok := kv.ack[op.ID]
-					if !ok || v < op.ReqID {
-						switch op.Kind {
-						case "Get":
-						case "Put":
-							kv.db.Put(op.Key, op.Value)
-						case "Append":
-							kv.db.Append(op.Key, op.Value)
-						default:
-							DPrintf("err op kind :%s\n", op.Kind)
-							panic("err op")
-						}
-						kv.ack[op.ID] = op.ReqID
+					kv.mu.Lock()
+					if !kv.CheckDup(op.ID, op.ReqID) {
+						kv.Apply(op)
 					}
-
-					if ch, ok := kv.waiter[applyMsg.CommandIndex]; !ok {
-						kv.waiter[applyMsg.CommandIndex] = make(chan Op, 1)
-					} else {
+					ch, ok := kv.waiter[applyMsg.CommandIndex]
+					if ok {
 						select {
 						case <-kv.waiter[applyMsg.CommandIndex]:
 						default:
 						}
 						ch <- op
+					} else {
+						kv.waiter[applyMsg.CommandIndex] = make(chan Op, 1)
 					}
-					if kv.maxraftstate != -1 && kv.rf.RaftStateSize() > kv.maxraftstate {
-						sp := kv.MakeSnapshot()
-						go kv.rf.MakeSnapshot(applyMsg.CommandIndex, sp)
+
+					//need snapshot
+					if maxraftstate != -1 && kv.rf.RaftStateSize() > maxraftstate {
+						w := new(bytes.Buffer)
+						e := gob.NewEncoder(w)
+						e.Encode(kv.db)
+						e.Encode(kv.ack)
+						data := w.Bytes()
+						go kv.rf.MakeSnapshot(applyMsg.CommandIndex, data)
 					}
+					kv.mu.Unlock()
+
+					// v, ok := kv.ack[op.ID]
+
+					// if !ok || v < op.ReqID {
+					// 	switch op.Kind {
+					// 	case "Get":
+					// 	case "Put":
+					// 		kv.db[op.Key] = op.Value
+					// 	case "Append":
+					// 		kv.db[op.Key] += op.Value
+					// 	default:
+					// 		DPrintf("err op kind :%s\n", op.Kind)
+					// 		panic("err op")
+					// 	}
+					// 	kv.ack[op.ID] = op.ReqID
+					// }
+
+					// if ch, ok := kv.waiter[applyMsg.CommandIndex]; !ok {
+					// 	kv.waiter[applyMsg.CommandIndex] = make(chan Op, 1)
+					// } else {
+					// 	select {
+					// 	case <-kv.waiter[applyMsg.CommandIndex]:
+					// 	default:
+					// 	}
+					// 	ch <- op
+					// }
+					// if kv.maxraftstate != -1 && kv.rf.RaftStateSize() > kv.maxraftstate {
+					// 	sp := kv.MakeSnapshot()
+					// 	go kv.rf.MakeSnapshot(applyMsg.CommandIndex, sp)
+					// }
 				} else {
-					kv.LoadSnapshot(applyMsg.Snapshot)
+					var LastIncludedIndex int
+					var LastIncludedTerm int
+
+					r := bytes.NewBuffer(applyMsg.Snapshot)
+					d := gob.NewDecoder(r)
+
+					kv.mu.Lock()
+					d.Decode(&LastIncludedIndex)
+					d.Decode(&LastIncludedTerm)
+					kv.db = make(map[string]string)
+					kv.ack = make(map[int64]int64)
+					d.Decode(&kv.db)
+					d.Decode(&kv.ack)
+					kv.mu.Unlock()
+					// kv.LoadSnapshot(applyMsg.Snapshot)
 				}
-				kv.mu.Unlock()
 			}
 		}
 	}()
