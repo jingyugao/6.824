@@ -19,9 +19,10 @@ func (rf *Raft) readSnapshot(data []byte) {
 	var LastIncludedIndex int
 	var LastIncludedTerm int
 
-	d.Decode(&LastIncludedIndex)
-	d.Decode(&LastIncludedTerm)
-
+	d.Decode(&rf.spshot.LastIncludedIndex)
+	d.Decode(&rf.spshot.LastIncludedTerm)
+	LastIncludedIndex = rf.spshot.LastIncludedIndex
+	LastIncludedTerm = rf.spshot.LastIncludedTerm
 	rf.commitIndex = LastIncludedIndex
 	rf.lastApplied = LastIncludedIndex
 

@@ -184,7 +184,6 @@ func (rf *Raft) persistAll() {
 	data2 = append(data2, rf.spshot.Data...)
 	rf.persister.SaveSnapshot(data2)
 	return
-
 }
 func (rf *Raft) MakeSnapshot(lastIncludedIndex int, data []byte) {
 	// dont contain the lastCmtIdx log
