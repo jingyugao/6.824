@@ -43,7 +43,7 @@ import (
 //
 type ApplyMsg struct {
 	UseSnapshot  bool
-	Snapshot     []byte
+	Snapshot     Snapshot
 	CommandValid bool
 	Command      interface{}
 	CommandIndex int
@@ -185,11 +185,12 @@ func (rf *Raft) persistAll() {
 	rf.persister.SaveSnapshot(data2)
 	return
 }
-func (rf *Raft) MakeSnapshot(lastIncludedIndex int, data []byte) {
+func (rf *Raft) MakeSnapshot(sp Snapshot) {
 	// dont contain the lastCmtIdx log
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-
+	lastIncludedIndex := sp.LastIncludedIndex
+	data := sp.Data
 	if lastIncludedIndex <= rf.log[0].Index || lastIncludedIndex > rf.lastIndex() {
 		return
 	}
@@ -249,7 +250,7 @@ func (rf *Raft) readPersistSp(data []byte) {
 		rf.applyCh <- ApplyMsg{
 			CommandValid: false,
 			UseSnapshot:  true,
-			Snapshot:     data,
+			Snapshot:     Snapshot{Data: data},
 		}
 	}()
 }
@@ -611,7 +612,7 @@ func (rf *Raft) InstallSnapshot2(args *InstallSnapshotArgs, reply *InstallSnapsh
 
 	rf.log = truncateLog(args.LastIncludedIndex, args.LastIncludedTerm, rf.log)
 
-	msg := ApplyMsg{CommandValid: false, UseSnapshot: true, Snapshot: args.Data}
+	msg := ApplyMsg{CommandValid: false, UseSnapshot: true, Snapshot: Snapshot{Data: args.Data}}
 
 	rf.lastApplied = args.LastIncludedIndex
 	rf.commitIndex = args.LastIncludedIndex
@@ -670,7 +671,7 @@ func (rf *Raft) InstallSnapshot2(args *InstallSnapshotArgs, reply *InstallSnapsh
 	rf.applyCh <- ApplyMsg{
 		UseSnapshot:  true,
 		CommandValid: false,
-		Snapshot:     args.Data,
+		Snapshot:     Snapshot{Data: args.Data},
 		CommandIndex: args.LastIncludedIndex,
 	}
 }

@@ -28,7 +28,7 @@ func (rf *Raft) readSnapshot(data []byte) {
 
 	rf.log = truncateLog(LastIncludedIndex, LastIncludedTerm, rf.log)
 
-	msg := ApplyMsg{CommandValid: true, UseSnapshot: true, Snapshot: data}
+	msg := ApplyMsg{CommandValid: true, UseSnapshot: true, Snapshot: Snapshot{Data: data}}
 
 	go func() {
 		rf.applyCh <- msg
@@ -49,7 +49,7 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 
 	rf.log = truncateLog(args.LastIncludedIndex, args.LastIncludedTerm, rf.log)
 
-	msg := ApplyMsg{UseSnapshot: true, Snapshot: args.Data}
+	msg := ApplyMsg{UseSnapshot: true, Snapshot: Snapshot{Data: args.Data}}
 
 	rf.lastApplied = args.LastIncludedIndex
 	rf.commitIndex = args.LastIncludedIndex

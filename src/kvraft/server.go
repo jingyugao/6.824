@@ -290,7 +290,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 				var LastIncludedIndex int
 				var LastIncludedTerm int
 
-				r := bytes.NewBuffer(msg.Snapshot)
+				r := bytes.NewBuffer(msg.Snapshot.Data)
 				d := gob.NewDecoder(r)
 
 				kv.mu.Lock()
@@ -326,7 +326,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 					e.Encode(kv.db)
 					e.Encode(kv.ack)
 					data := w.Bytes()
-					go kv.rf.MakeSnapshot(msg.CommandIndex, data)
+					go kv.rf.MakeSnapshot(raft.Snapshot{LastIncludedIndex: msg.CommandIndex, Data: data})
 				}
 				kv.mu.Unlock()
 			}
@@ -418,7 +418,7 @@ func StartKVServer2(servers []*labrpc.ClientEnd, me int, persister *raft.Persist
 					var LastIncludedIndex int
 					var LastIncludedTerm int
 
-					r := bytes.NewBuffer(applyMsg.Snapshot)
+					r := bytes.NewBuffer(applyMsg.Snapshot.Data)
 					d := gob.NewDecoder(r)
 
 					kv.mu.Lock()
