@@ -381,7 +381,7 @@ func StartKVServer2(servers []*labrpc.ClientEnd, me int, persister *raft.Persist
 						e.Encode(kv.db)
 						e.Encode(kv.ack)
 						data := w.Bytes()
-						go kv.rf.MakeSnapshot(applyMsg.CommandIndex, data)
+						go kv.rf.MakeSnapshot(raft.Snapshot{LastIncludedIndex: applyMsg.CommandIndex, Data: data})
 					}
 					kv.mu.Unlock()
 
