@@ -148,7 +148,7 @@ func (rf *Raft) becomeFollower(term int) {
 // where it can later be retrieved after a crash and restart.
 // see paper's Figure 2 for a description of what should be persistent.
 //
-func (rf *Raft) persist() {
+func (rf *Raft) persist2() {
 	// Your code here (2C).
 	// Example:
 	w := new(bytes.Buffer)
@@ -159,7 +159,7 @@ func (rf *Raft) persist() {
 	data := w.Bytes()
 	rf.persister.SaveRaftState(data)
 }
-func (rf *Raft) readPersist(data []byte) {
+func (rf *Raft) readPersist2(data []byte) {
 	// Your code here.
 	// Example:
 	r := bytes.NewBuffer(data)
@@ -186,7 +186,7 @@ func (rf *Raft) persistAll() {
 	return
 
 }
-func (rf *Raft) MakeSnapshot(lastIncludedIndex int, data []byte) {
+func (rf *Raft) MakeSnapshot2(lastIncludedIndex int, data []byte) {
 	// dont contain the lastCmtIdx log
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -281,7 +281,7 @@ type RequestVoteReply struct {
 // example RequestVote RPC handler.
 //
 // currentTerm is equal lastLogTerm
-func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
+func (rf *Raft) RequestVote2(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	fn := "RequestVote"
 	rf.mu.Lock()
@@ -360,7 +360,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 // that the caller passes the address of the reply struct with &, not
 // the struct itself.
 //
-func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) (ok bool) {
+func (rf *Raft) sendRequestVote2(server int, args *RequestVoteArgs, reply *RequestVoteReply) (ok bool) {
 
 	ok = rf.peers[server].Call("Raft.RequestVote", args, reply)
 	rf.mu.Lock()
@@ -597,7 +597,7 @@ type InstallSnapshotReply struct {
 	Term int
 }
 
-func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
+func (rf *Raft) InstallSnapshot2(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	// 1. Reply immediately if term < currentTerm
@@ -676,7 +676,7 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	}
 }
 
-func (rf *Raft) sendInstallSnapshot(server int, args *InstallSnapshotArgs, reply *InstallSnapshotReply) (ok bool) {
+func (rf *Raft) sendInstallSnapshot2(server int, args *InstallSnapshotArgs, reply *InstallSnapshotReply) (ok bool) {
 	fn := "sendInstallSnapshot"
 	glog.Infof("[%s]: %d send %+v to %d, recv %+v", fn, rf.me, args, server, reply)
 
@@ -829,7 +829,7 @@ func (rf *Raft) Kill() {
 // Make() must return quickly, so it should start goroutines
 // for any long-running work.
 
-func Make(peers []*labrpc.ClientEnd, me int,
+func Make2(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
 	rf := &Raft{}
 	rf.voteFor = -1
