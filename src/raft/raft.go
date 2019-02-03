@@ -829,7 +829,7 @@ func (rf *Raft) Kill() {
 // Make() must return quickly, so it should start goroutines
 // for any long-running work.
 
-func Make2(peers []*labrpc.ClientEnd, me int,
+func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
 	rf := &Raft{}
 	rf.voteFor = -1
@@ -846,7 +846,8 @@ func Make2(peers []*labrpc.ClientEnd, me int,
 	rf.electDuration = time.Duration((rand.Intn(150) + 150)) * time.Millisecond
 	// Your initialization code here (2A, 2B, 2C).
 	rf.readPersist(persister.ReadRaftState())
-	rf.readPersistSp(persister.ReadSnapshot())
+	// rf.readPersistSp(persister.ReadSnapshot())
+	rf.readSnapshot(persister.ReadSnapshot())
 
 	go func() {
 		for {
