@@ -186,7 +186,7 @@ func (rf *Raft) persistAll() {
 	return
 
 }
-func (rf *Raft) MakeSnapshot2(lastIncludedIndex int, data []byte) {
+func (rf *Raft) MakeSnapshot(lastIncludedIndex int, data []byte) {
 	// dont contain the lastCmtIdx log
 	rf.mu.Lock()
 	defer rf.mu.Unlock()

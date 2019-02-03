@@ -411,7 +411,7 @@ func (rf *Raft) sendAppendEntries2(server int, args *AppendEntriesArgs, reply *A
 
 // ------------------------------------------------------
 
-func (rf *Raft) MakeSnapshot(index int, snapshot []byte) {
+func (rf *Raft) MakeSnapshot2(index int, snapshot []byte) {
 
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
