@@ -148,7 +148,7 @@ func (rf *Raft) becomeFollower(term int) {
 // where it can later be retrieved after a crash and restart.
 // see paper's Figure 2 for a description of what should be persistent.
 //
-func (rf *Raft) persist2() {
+func (rf *Raft) persist() {
 	// Your code here (2C).
 	// Example:
 	w := new(bytes.Buffer)
@@ -159,7 +159,7 @@ func (rf *Raft) persist2() {
 	data := w.Bytes()
 	rf.persister.SaveRaftState(data)
 }
-func (rf *Raft) readPersist2(data []byte) {
+func (rf *Raft) readPersist(data []byte) {
 	// Your code here.
 	// Example:
 	r := bytes.NewBuffer(data)
@@ -676,7 +676,7 @@ func (rf *Raft) InstallSnapshot2(args *InstallSnapshotArgs, reply *InstallSnapsh
 	}
 }
 
-func (rf *Raft) sendInstallSnapshot2(server int, args *InstallSnapshotArgs, reply *InstallSnapshotReply) (ok bool) {
+func (rf *Raft) sendInstallSnapshot(server int, args *InstallSnapshotArgs, reply *InstallSnapshotReply) (ok bool) {
 	fn := "sendInstallSnapshot"
 	glog.Infof("[%s]: %d send %+v to %d, recv %+v", fn, rf.me, args, server, reply)
 
