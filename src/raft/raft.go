@@ -281,7 +281,7 @@ type RequestVoteReply struct {
 // example RequestVote RPC handler.
 //
 // currentTerm is equal lastLogTerm
-func (rf *Raft) RequestVote2(args *RequestVoteArgs, reply *RequestVoteReply) {
+func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	fn := "RequestVote"
 	rf.mu.Lock()
@@ -360,7 +360,7 @@ func (rf *Raft) RequestVote2(args *RequestVoteArgs, reply *RequestVoteReply) {
 // that the caller passes the address of the reply struct with &, not
 // the struct itself.
 //
-func (rf *Raft) sendRequestVote2(server int, args *RequestVoteArgs, reply *RequestVoteReply) (ok bool) {
+func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) (ok bool) {
 
 	ok = rf.peers[server].Call("Raft.RequestVote", args, reply)
 	rf.mu.Lock()
